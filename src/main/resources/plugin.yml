@@ -1,0 +1,18 @@
+name: LifestealPlugin
+version: 1.0
+main: com.lifesteal.LifestealPlugin
+api-version: 1.21
+author: YourName
+description: A lifesteal plugin with heart mechanics
+
+commands:
+  withdraw:
+    description: Withdraw hearts and get heart items
+    usage: /withdraw <amount>
+    permission: lifesteal.withdraw
+    permission-message: You don't have permission to use this command
+
+permissions:
+  lifesteal.withdraw:
+    description: Allows players to withdraw hearts
+    default: true
