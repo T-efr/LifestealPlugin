@@ -58,13 +58,6 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
             heart.setItemMeta(meta);
         }
         return heart;
-    }
-
-    @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(20.0);
-    }
 
     @EventHandler
     public void onUseHeart(PlayerInteractEvent event) {
