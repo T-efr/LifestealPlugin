@@ -4,12 +4,15 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
@@ -21,32 +24,28 @@ import java.util.Arrays;
 
 public class LifestealPlugin extends JavaPlugin implements Listener {
 
-    // Configuration Constants
     private static final int MIN_HEARTS = 3;
     private static final int DEFAULT_MAX_HEARTS = 20;
     private static final int DRAGON_EGG_MAX_HEARTS = 25;
-    private static final int CRAFTED_HEART_MAX = 10; 
 
     @Override
     public void onEnable() {
-        // Register events and recipes
         Bukkit.getPluginManager().registerEvents(this, this);
         registerHeartRecipe();
-        getLogger().info("Lifesteal Plugin has been enabled!");
+        getLogger().info("Lifesteal Plugin Enabled!");
     }
 
     private void registerHeartRecipe() {
         ItemStack heart = createHeartItem();
         NamespacedKey key = new NamespacedKey(this, "lifesteal_heart");
+        // Remove old recipe to avoid errors on reload
+        Bukkit.removeRecipe(key);
         ShapedRecipe recipe = new ShapedRecipe(key, heart);
-        
-        // Recipe: O = Ominous Key, N = Netherite, G = Gold Block, S = Nether Star
         recipe.shape("ONO", "GSG", "ONO");
         recipe.setIngredient('O', Material.OMINOUS_TRIAL_KEY);
         recipe.setIngredient('N', Material.NETHERITE_INGOT);
         recipe.setIngredient('G', Material.GOLD_BLOCK);
         recipe.setIngredient('S', Material.NETHER_STAR);
-        
         Bukkit.addRecipe(recipe);
     }
 
@@ -55,32 +54,83 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         ItemMeta meta = heart.getItemMeta();
         if (meta != null) {
             meta.setDisplayName("§c❤ Heart");
-            meta.setLore(Arrays.asList(
-                "§7Right-click to gain a heart!", 
-                "§7Maximum: 10 hearts from crafting"
-            ));
-            meta.setCustomModelData(1); 
+            meta.setLore(Arrays.asList("§7Right-click to gain a heart!"));
             heart.setItemMeta(meta);
         }
         return heart;
     }
 
+    // --- DRAGON EGG LOGIC ---
+    
+    private void updatePlayerMaxHealth(Player player) {
+        AttributeInstance maxHealthAttr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (maxHealthAttr == null) return;
+
+        double currentMax = maxHealthAttr.getBaseValue();
+        int allowedMaxHearts = getMaxHeartsAllowed(player);
+        double allowedMaxHP = allowedMaxHearts * 2.0;
+
+        // If player dropped the egg and is now OVER their allowed max
+        if (currentMax > allowedMaxHP) {
+            maxHealthAttr.setBaseValue(allowedMaxHP);
+            if (player.getHealth() > allowedMaxHP) {
+                player.setHealth(allowedMaxHP);
+            }
+            player.sendMessage("§cYou lost your extra hearts because the Dragon Egg is gone!");
+        }
+    }
+
+    @EventHandler public void onDrop(PlayerDropItemEvent e) { updatePlayerMaxHealth(e.getPlayer()); }
+    @EventHandler public void onInvClose(InventoryCloseEvent e) { updatePlayerMaxHealth((Player) e.getPlayer()); }
+
+    // --- DEATH & STEALING ---
+
     @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        // If it's the player's first time, ensure they start at 10 hearts (20 HP)
-        if (!player.hasPlayedBefore()) {
-            player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(20.0);
-            player.setHealth(20.0);
+    public void onDeath(PlayerDeathEvent event) {
+        Player victim = event.getEntity();
+        Player killer = victim.getKiller();
+        if (killer == null || killer.equals(victim)) return;
+
+        AttributeInstance victimAttr = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        AttributeInstance killerAttr = killer.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (victimAttr == null || killerAttr == null) return;
+
+        if (victimAttr.getBaseValue() <= MIN_HEARTS * 2) {
+            killer.sendMessage("§e" + victim.getName() + " is at minimum hearts. No heart gained.");
+            return;
+        }
+
+        victimAttr.setBaseValue(victimAttr.getBaseValue() - 2.0);
+        
+        int killerCap = getMaxHeartsAllowed(killer);
+        if (killerAttr.getBaseValue() < killerCap * 2) {
+            killerAttr.setBaseValue(killerAttr.getBaseValue() + 2.0);
+            killer.setHealth(Math.min(killer.getHealth() + 2.0, killerAttr.getBaseValue()));
+            killer.sendMessage("§a+1 ❤ §7Heart stolen!");
         }
     }
 
     @EventHandler
-    public void onPlayerDeath(PlayerDeathEvent event) {
-        Player victim = event.getEntity();
-        Player killer = victim.getKiller();
+    public void onUseHeart(PlayerInteractEvent event) {
+        ItemStack item = event.getItem();
+        if (item == null || !item.hasItemMeta()) return;
+        if (!item.getItemMeta().getDisplayName().equals("§c❤ Heart")) return;
 
-        // Only trigger if a player was killed by another player
-        if (killer == null || killer.equals(victim)) return;
+        Player player = event.getPlayer();
+        AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (attr == null) return;
 
-        double victimMaxHealth = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+        if (attr.getBaseValue() < getMaxHeartsAllowed(player) * 2) {
+            attr.setBaseValue(attr.getBaseValue() + 2.0);
+            item.setAmount(item.getAmount() - 1);
+            player.sendMessage("§a+1 ❤ §7Heart consumed!");
+        } else {
+            player.sendMessage("§cYou are at your maximum hearts!");
+        }
+        event.setCancelled(true);
+    }
+
+    private int getMaxHeartsAllowed(Player player) {
+        return player.getInventory().contains(Material.DRAGON_EGG) ? DRAGON_EGG_MAX_HEARTS : DEFAULT_MAX_HEARTS;
+    }
+}
