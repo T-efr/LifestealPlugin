@@ -59,7 +59,7 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         return heart;
     }
 
-    // --- DRAGON EGG LOGIC (Gives +5 hearts while held) ---
+    // --- DRAGON EGG LOGIC ---
 
     private void handleEggBuff(Player player) {
         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
@@ -68,13 +68,12 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         boolean hasEgg = player.getInventory().contains(Material.DRAGON_EGG);
         double currentMax = attr.getBaseValue();
 
-        // This is tricky: we only want to add/remove the 5 hearts once.
-        // If they have the egg and health is <= 20 hearts (40hp), add the bonus.
+        // If they have egg and are at/below normal cap, add 5 hearts
         if (hasEgg && currentMax <= (DEFAULT_MAX_HEARTS * 2)) {
             attr.setBaseValue(currentMax + EGG_BONUS_HP);
             player.sendMessage("§5§lThe Dragon Egg grants you 5 extra hearts!");
         } 
-        // If they don't have the egg but health is > 20 hearts, remove the bonus.
+        // If they don't have egg and are above normal cap, remove 5 hearts
         else if (!hasEgg && currentMax > (DEFAULT_MAX_HEARTS * 2)) {
             double newMax = Math.max(MIN_HEARTS * 2, currentMax - EGG_BONUS_HP);
             attr.setBaseValue(newMax);
@@ -87,7 +86,7 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
     @EventHandler public void onInvClose(InventoryCloseEvent e) { handleEggBuff((Player) e.getPlayer()); }
     @EventHandler public void onJoin(PlayerJoinEvent e) { handleEggBuff(e.getPlayer()); }
 
-    // --- WITHDRAW COMMAND ---
+    // --- WITHDRAW COMMAND (With Egg Protection) ---
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -105,14 +104,22 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
 
                 AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                 double currentMax = attr.getBaseValue();
-                double newHealth = currentMax - (amount * 2.0);
+                
+                // --- THE PROTECTION LOGIC ---
+                // If they have the egg, their "floor" is 3 hearts + 5 egg hearts = 8 hearts (16 HP)
+                double effectiveMinHealth = MIN_HEARTS * 2;
+                if (player.getInventory().contains(Material.DRAGON_EGG)) {
+                    effectiveMinHealth += EGG_BONUS_HP;
+                }
 
-                if (newHealth < MIN_HEARTS * 2) {
-                    player.sendMessage("§cYou cannot withdraw below 3 hearts!");
+                double resultHealth = currentMax - (amount * 2.0);
+
+                if (resultHealth < effectiveMinHealth) {
+                    player.sendMessage("§cYou cannot withdraw your minimum hearts or your Dragon Egg hearts!");
                     return true;
                 }
 
-                attr.setBaseValue(newHealth);
+                attr.setBaseValue(resultHealth);
                 ItemStack heartItem = createHeartItem();
                 heartItem.setAmount(amount);
                 player.getInventory().addItem(heartItem);
@@ -137,16 +144,14 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         AttributeInstance victimAttr = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         AttributeInstance killerAttr = killer.getAttribute(Attribute.GENERIC_MAX_HEALTH);
 
-        if (victimAttr.getBaseValue() <= MIN_HEARTS * 2) {
-            killer.sendMessage("§e" + victim.getName() + " is at minimum hearts. No heart gained.");
+        if (victimAttr.getBaseValue() <= MIN_HEARTS * 2 + (playerHasEgg(victim) ? EGG_BONUS_HP : 0)) {
+            killer.sendMessage("§e" + victim.getName() + " is at their minimum hearts. No heart gained.");
             return;
         }
 
         victimAttr.setBaseValue(victimAttr.getBaseValue() - 2.0);
         
-        // Killer can steal hearts up to 20 (or 25 if they have the egg)
-        double limit = playerHasEgg(killer) ? (DEFAULT_MAX_HEARTS * 2) + EGG_BONUS_HP : (DEFAULT_MAX_HEARTS * 2);
-        
+        double limit = DEFAULT_MAX_HEARTS * 2 + (playerHasEgg(killer) ? EGG_BONUS_HP : 0);
         if (killerAttr.getBaseValue() < limit) {
             killerAttr.setBaseValue(killerAttr.getBaseValue() + 2.0);
             killer.setHealth(Math.min(killer.getHealth() + 2.0, killerAttr.getBaseValue()));
@@ -163,7 +168,7 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         
-        double limit = playerHasEgg(player) ? (DEFAULT_MAX_HEARTS * 2) + EGG_BONUS_HP : (DEFAULT_MAX_HEARTS * 2);
+        double limit = DEFAULT_MAX_HEARTS * 2 + (playerHasEgg(player) ? EGG_BONUS_HP : 0);
 
         if (attr.getBaseValue() < limit) {
             attr.setBaseValue(attr.getBaseValue() + 2.0);
