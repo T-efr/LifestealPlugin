@@ -16,6 +16,9 @@ import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.NamespacedKey;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.block.Action;
+
 
 import java.util.Arrays;
 
@@ -65,9 +68,13 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
     }
 
     @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        if (player.getAttribute(Attribute.GENERIC_MAX_HEALTH) == null) {
+public void onPlayerJoin(PlayerJoinEvent event) {
+    Player player = event.getPlayer();
+    player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(20.0);
+}
+
+}
+ {
             player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(20.0);
         }
     }
@@ -173,6 +180,39 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         }
         return false;
     }
+@EventHandler
+public void onUseHeart(PlayerInteractEvent event) {
+    if (!event.getAction().isRightClick()) return;
+
+    Player player = event.getPlayer();
+    ItemStack item = event.getItem();
+
+    if (item == null || item.getType() != Material.RED_DYE) return;
+    if (!item.hasItemMeta()) return;
+
+    ItemMeta meta = item.getItemMeta();
+    if (!meta.hasDisplayName()) return;
+
+    if (!meta.getDisplayName().equals("§c❤ Heart")) return;
+
+    double currentMaxHealth = player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+
+    // Check crafted heart limit
+    if (currentMaxHealth >= CRAFTED_HEART_MAX * 2) {
+        player.sendMessage("§cYou already reached the crafted heart limit!");
+        return;
+    }
+
+    // Add heart
+    player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(currentMaxHealth + 2.0);
+    player.setHealth(Math.min(player.getHealth() + 2.0, currentMaxHealth + 2.0));
+
+    // Consume item
+    item.setAmount(item.getAmount() - 1);
+
+    player.sendMessage("§a+1 ❤ §7Heart consumed! Max hearts: §a" + (currentMaxHealth + 2.0) / 2);
+}
+
 
     private int getMaxHearts(Player player) {
         // Check if player has dragon egg in inventory
