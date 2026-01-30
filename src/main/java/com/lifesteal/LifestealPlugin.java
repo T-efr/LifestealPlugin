@@ -63,4 +63,80 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
-        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(
+        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(20.0);
+    }
+
+    @EventHandler
+    public void onUseHeart(PlayerInteractEvent event) {
+        if (!event.getAction().isRightClick()) return;
+
+        Player player = event.getPlayer();
+        ItemStack item = event.getItem();
+
+        if (item == null || item.getType() != Material.RED_DYE) return;
+        if (!item.hasItemMeta()) return;
+
+        ItemMeta meta = item.getItemMeta();
+        if (!meta.hasDisplayName()) return;
+        if (!meta.getDisplayName().equals("§c❤ Heart")) return;
+
+        double currentMaxHealth = player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+
+        if (currentMaxHealth >= CRAFTED_HEART_MAX * 2) {
+            player.sendMessage("§cCrafted heart limit reached!");
+            return;
+        }
+
+        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(currentMaxHealth + 2.0);
+        player.setHealth(Math.min(player.getHealth() + 2.0, currentMaxHealth + 2.0));
+
+        item.setAmount(item.getAmount() - 1);
+
+        player.sendMessage("§a+1 ❤ Heart consumed!");
+    }
+
+    @EventHandler
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Player victim = event.getEntity();
+        Player killer = victim.getKiller();
+
+        if (killer == null || killer.equals(victim)) return;
+
+        double victimMax = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+        double killerMax = killer.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+
+        if (victimMax <= MIN_HEARTS * 2) return;
+
+        victim.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(victimMax - 2.0);
+
+        if (killerMax < getMaxHearts(killer) * 2) {
+            killer.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(killerMax + 2.0);
+        }
+    }
+
+    @EventHandler
+    public void onCraftHeart(CraftItemEvent event) {
+        if (!event.getRecipe().getResult().isSimilar(createHeartItem())) return;
+
+        Player player = (Player) event.getWhoClicked();
+        double max = player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getBaseValue();
+
+        if (max >= CRAFTED_HEART_MAX * 2) {
+            player.sendMessage("§cCrafted heart limit reached!");
+            event.setCancelled(true);
+        }
+    }
+
+    private int getMaxHearts(Player player) {
+        if (player.getInventory().contains(Material.DRAGON_EGG)) {
+            return DRAGON_EGG_MAX_HEARTS;
+        }
+        return DEFAULT_MAX_HEARTS;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        return false;
+    }
+}
+}
