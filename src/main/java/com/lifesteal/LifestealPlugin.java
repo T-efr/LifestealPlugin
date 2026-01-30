@@ -18,6 +18,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Arrays;
@@ -27,9 +28,11 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
     private static final int MIN_HEARTS = 3;
     private static final int DEFAULT_MAX_HEARTS = 20;
     private static final double EGG_BONUS_HP = 10.0; // 5 Hearts
+    private NamespacedKey eggTag;
 
     @Override
     public void onEnable() {
+        this.eggTag = new NamespacedKey(this, "has_egg_buff");
         Bukkit.getPluginManager().registerEvents(this, this);
         registerHeartRecipe();
         getLogger().info("Lifesteal Plugin Enabled!");
@@ -59,25 +62,27 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         return heart;
     }
 
-    // --- DRAGON EGG LOGIC ---
+    // --- IMPROVED DRAGON EGG LOGIC ---
 
     private void handleEggBuff(Player player) {
         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
         if (attr == null) return;
 
-        boolean hasEgg = player.getInventory().contains(Material.DRAGON_EGG);
-        double currentMax = attr.getBaseValue();
+        boolean hasEggInInv = player.getInventory().contains(Material.DRAGON_EGG);
+        boolean hasEggBuffApplied = player.getPersistentDataContainer().has(eggTag, PersistentDataType.BYTE);
 
-        // If they have egg and are at/below normal cap, add 5 hearts
-        if (hasEgg && currentMax <= (DEFAULT_MAX_HEARTS * 2)) {
-            attr.setBaseValue(currentMax + EGG_BONUS_HP);
+        // CASE 1: Has egg but NO buff applied yet -> Add 5 hearts
+        if (hasEggInInv && !hasEggBuffApplied) {
+            attr.setBaseValue(attr.getBaseValue() + EGG_BONUS_HP);
+            player.getPersistentDataContainer().set(eggTag, PersistentDataType.BYTE, (byte) 1);
             player.sendMessage("§5§lThe Dragon Egg grants you 5 extra hearts!");
         } 
-        // If they don't have egg and are above normal cap, remove 5 hearts
-        else if (!hasEgg && currentMax > (DEFAULT_MAX_HEARTS * 2)) {
-            double newMax = Math.max(MIN_HEARTS * 2, currentMax - EGG_BONUS_HP);
+        // CASE 2: No egg in inv but buff IS applied -> Remove 5 hearts
+        else if (!hasEggInInv && hasEggBuffApplied) {
+            double newMax = Math.max(MIN_HEARTS * 2, attr.getBaseValue() - EGG_BONUS_HP);
             attr.setBaseValue(newMax);
             if (player.getHealth() > newMax) player.setHealth(newMax);
+            player.getPersistentDataContainer().remove(eggTag);
             player.sendMessage("§cThe Dragon Egg was lost. You lost 5 hearts!");
         }
     }
@@ -86,17 +91,13 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
     @EventHandler public void onInvClose(InventoryCloseEvent e) { handleEggBuff((Player) e.getPlayer()); }
     @EventHandler public void onJoin(PlayerJoinEvent e) { handleEggBuff(e.getPlayer()); }
 
-    // --- WITHDRAW COMMAND (With Egg Protection) ---
+    // --- WITHDRAW COMMAND ---
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("withdraw")) {
             if (!(sender instanceof Player player)) return true;
-
-            if (args.length != 1) {
-                player.sendMessage("§cUsage: /withdraw <amount>");
-                return true;
-            }
+            if (args.length != 1) { player.sendMessage("§c/withdraw <amount>"); return true; }
 
             try {
                 int amount = Integer.parseInt(args[0]);
@@ -105,35 +106,27 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
                 AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
                 double currentMax = attr.getBaseValue();
                 
-                // --- THE PROTECTION LOGIC ---
-                // If they have the egg, their "floor" is 3 hearts + 5 egg hearts = 8 hearts (16 HP)
-                double effectiveMinHealth = MIN_HEARTS * 2;
-                if (player.getInventory().contains(Material.DRAGON_EGG)) {
-                    effectiveMinHealth += EGG_BONUS_HP;
-                }
+                // Effective floor: 3 hearts normally, 8 hearts if holding egg
+                double minLimit = (MIN_HEARTS * 2) + (player.getPersistentDataContainer().has(eggTag, PersistentDataType.BYTE) ? EGG_BONUS_HP : 0);
 
-                double resultHealth = currentMax - (amount * 2.0);
-
-                if (resultHealth < effectiveMinHealth) {
-                    player.sendMessage("§cYou cannot withdraw your minimum hearts or your Dragon Egg hearts!");
+                if (currentMax - (amount * 2.0) < minLimit) {
+                    player.sendMessage("§cYou cannot withdraw your minimum hearts or Dragon Egg bonus!");
                     return true;
                 }
 
-                attr.setBaseValue(resultHealth);
+                attr.setBaseValue(currentMax - (amount * 2.0));
                 ItemStack heartItem = createHeartItem();
                 heartItem.setAmount(amount);
                 player.getInventory().addItem(heartItem);
                 player.sendMessage("§aWithdrew " + amount + " heart(s)!");
 
-            } catch (NumberFormatException e) {
-                player.sendMessage("§cInvalid number.");
-            }
+            } catch (NumberFormatException e) { player.sendMessage("§cInvalid number."); }
             return true;
         }
         return false;
     }
 
-    // --- DEATH & USE ---
+    // --- DEATH & CONSUME ---
 
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
@@ -141,21 +134,22 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         Player killer = victim.getKiller();
         if (killer == null || killer.equals(victim)) return;
 
-        AttributeInstance victimAttr = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-        AttributeInstance killerAttr = killer.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        AttributeInstance vAttr = victim.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        AttributeInstance kAttr = killer.getAttribute(Attribute.GENERIC_MAX_HEALTH);
 
-        if (victimAttr.getBaseValue() <= MIN_HEARTS * 2 + (playerHasEgg(victim) ? EGG_BONUS_HP : 0)) {
-            killer.sendMessage("§e" + victim.getName() + " is at their minimum hearts. No heart gained.");
+        double vMin = (MIN_HEARTS * 2) + (victim.getPersistentDataContainer().has(eggTag, PersistentDataType.BYTE) ? EGG_BONUS_HP : 0);
+        if (vAttr.getBaseValue() <= vMin) {
+            killer.sendMessage("§eTarget is at minimum hearts!");
             return;
         }
 
-        victimAttr.setBaseValue(victimAttr.getBaseValue() - 2.0);
+        vAttr.setBaseValue(vAttr.getBaseValue() - 2.0);
         
-        double limit = DEFAULT_MAX_HEARTS * 2 + (playerHasEgg(killer) ? EGG_BONUS_HP : 0);
-        if (killerAttr.getBaseValue() < limit) {
-            killerAttr.setBaseValue(killerAttr.getBaseValue() + 2.0);
-            killer.setHealth(Math.min(killer.getHealth() + 2.0, killerAttr.getBaseValue()));
-            killer.sendMessage("§a+1 ❤ §7Heart stolen!");
+        double kLimit = (DEFAULT_MAX_HEARTS * 2) + (killer.getPersistentDataContainer().has(eggTag, PersistentDataType.BYTE) ? EGG_BONUS_HP : 0);
+        if (kAttr.getBaseValue() < kLimit) {
+            kAttr.setBaseValue(kAttr.getBaseValue() + 2.0);
+            killer.setHealth(Math.min(killer.getHealth() + 2.0, kAttr.getBaseValue()));
+            killer.sendMessage("§a+1 ❤ Heart stolen!");
         }
     }
 
@@ -167,20 +161,15 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
 
         Player player = event.getPlayer();
         AttributeInstance attr = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
-        
-        double limit = DEFAULT_MAX_HEARTS * 2 + (playerHasEgg(player) ? EGG_BONUS_HP : 0);
+        double limit = (DEFAULT_MAX_HEARTS * 2) + (player.getPersistentDataContainer().has(eggTag, PersistentDataType.BYTE) ? EGG_BONUS_HP : 0);
 
         if (attr.getBaseValue() < limit) {
             attr.setBaseValue(attr.getBaseValue() + 2.0);
             item.setAmount(item.getAmount() - 1);
-            player.sendMessage("§a+1 ❤ §7Heart consumed!");
+            player.sendMessage("§a+1 ❤ Heart consumed!");
         } else {
-            player.sendMessage("§cYou have reached your heart limit!");
+            player.sendMessage("§cYou are at your heart limit!");
         }
         event.setCancelled(true);
-    }
-
-    private boolean playerHasEgg(Player player) {
-        return player.getInventory().contains(Material.DRAGON_EGG);
     }
 }
